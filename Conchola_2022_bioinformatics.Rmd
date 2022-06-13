@@ -9,7 +9,7 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# general fetal data processing
+# General fetal data processing
 ```{r}
 library(Seurat)
 
@@ -214,7 +214,7 @@ write.csv(nine.markers, "Cluster9.csv")
 
 ```
 
-# general cell tag data processing
+# General celltag data processing
 ```{r}
 library(CellTagR)
 ##set working directory to bam file
@@ -357,6 +357,641 @@ basalrooted.subset <- AddMetaData(basalrooted.subset, "basal", col.name = "root"
 celltag <- RenameIdents(object = celltag, '0' = "Basal", '1' = "FAS", '2' = "Multiciliated", '3' = "SCGB1A1/3A1/SPDEF", '4' = "Unknown (ASCL1+)", '5' = "Cycling", '6' = "Deuterosome", '7' = "Neuroendocrine")
 ```
 
+# FAS cell extraction
+```{r}
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+library(data.table)
+library(hdf5r)
+library(readxl)
+library(leiden)
+library(sctransform)
+library(slingshot)
+library(SingleCellExperiment)
+library(RColorBrewer)
+library(rgl)
+library(grDevices)
+library(destiny)
+library(plotly)
+library(SeuratWrappers)
+
+fetal.epithelial.cluster0 <- subset(x = fetal.epithelial, idents = c(0))
+
+DefaultAssay(fetal.epithelial.cluster0) <- "RNA"
+set.seed(888)
+fetal.epithelial.cluster0 <- NormalizeData(fetal.epithelial.cluster0, 
+                                            normalization.method = "LogNormalize", scale.factor =10000)
+
+fetal.epithelial.cluster0 <-  FindVariableFeatures(fetal.epithelial.cluster0)
+fetal.epithelial.cluster0 <- RunFastMNN(object.list = SplitObject(fetal.epithelial.cluster0, split.by = "orig.ident"))
+fetal.epithelial.cluster0 <- RunUMAP(fetal.epithelial.cluster0, dims = 1:30,reduction = "mnn")
+fetal.epithelial.cluster0 <- FindNeighbors(fetal.epithelial.cluster0, dims = 1:30,reduction = "mnn")
+fetal.epithelial.cluster0 <- FindClusters(fetal.epithelial.cluster0, resolution = 0.3, algorithm = 4)
+
+```
 
 
+# Celltag cluster 2 extraction (clone only)
+```{r}
+DefaultAssay(celltag) <- "RNA"
+celltag <- NormalizeData(celltag,normalization.method = "LogNormalize", scale.factor =10000)
+
+celltag$clone_or_not <- case_when(is.na(celltag$cloneid) ~ 0,
+                               !is.na(celltag$cloneid) ~ 1)
+celltag2_clone_only <- subset(x = celltag, subset = seurat_clusters == "2" & clone_or_not == 1)
+
+set.seed(888)
+celltag2_clone_only <- SCTransform(celltag2_clone_only, vars.to.regress = "percent.mt", verbose = FALSE)
+celltag2_clone_only <- RunPCA(celltag2_clone_only, verbose = FALSE)
+celltag2_clone_only <- RunUMAP(celltag2_clone_only, dims = 1:30)
+celltag2_clone_only <- FindNeighbors(celltag2_clone_only, dims = 1:30)
+celltag2_clone_only <- FindClusters(celltag2_clone_only, resolution = 0.3, algorithm = 4)
+
+DefaultAssay(celltag2_clone_only) <- "RNA"
+celltag2_clone_only <- NormalizeData(celltag2_clone_only,normalization.method = "LogNormalize", scale.factor =10000)
+
+```
+
+
+
+# Fetal 2D and 3D plus the multiciliated extraction 
+```{r}
+
+fetal.3D.one <- CreateSeuratObject(counts = fetal.3D.one.data, project = "fetal.3D.one", min.cells = 3, min.features = 200)
+fetal.3D.two <- CreateSeuratObject(counts = fetal.3D.two.data, project = "fetal.3D.two", min.cells = 3, min.features = 200)
+fetal.3D.one <- RenameCells(object = fetal.3D.one, add.cell.id = "fetal.3D.one")
+fetal.3D.two <- RenameCells(object = fetal.3D.two, add.cell.id = "fetal.3D.two")
+
+fetal.ali.one <- CreateSeuratObject(counts = fetal.ali.one.data, project = "fetal.ali.one", min.cells = 3, min.features = 200)
+fetal.ali.two <- CreateSeuratObject(counts = fetal.ali.two.data, project = "fetal.ali.two", min.cells = 3, min.features = 200)
+fetal.ali.one <- RenameCells(object = fetal.ali.one, add.cell.id = "fetal.ali.one")
+fetal.ali.two <- RenameCells(object = fetal.ali.two, add.cell.id = "fetal.ali.two")
+
+
+
+final_seurat_object <- merge(x = fetal.3D.one, y = c(fetal.3D.two,fetal.ali.one,fetal.ali.two))
+
+
+sample_species <- "human"
+qc_max_mito <- ifelse(sample_species == "human", 10, 5)
+final_seurat_object[["percent.mt"]] <- ifelse(sample_species == "human",
+                                                  PercentageFeatureSet(final_seurat_object, pattern = "^MT-"),
+                                                  PercentageFeatureSet(final_seurat_object, pattern = "^mt-"))
+
+
+VlnPlot(final_seurat_object, features <- c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+qc_min_genes= 200
+qc_min_counts = 200
+qc_max_genes = 12000
+qc_max_counts = 120000
+
+
+final_seurat_object <- subset(final_seurat_object, subset = nFeature_RNA >= qc_min_genes &
+                                nFeature_RNA <= qc_max_genes & percent.mt <= qc_max_mito &
+                                nCount_RNA >= qc_min_counts & nCount_RNA <= qc_max_counts)
+
+## batch correction
+final_seurat_object <- SplitObject(final_seurat_object, split.by = "orig.ident")
+
+set.seed(888)
+for (i in 1:length(final_seurat_object)) {
+    final_seurat_object[[i]] <- SCTransform(final_seurat_object[[i]],
+                                            verbose = FALSE, vars.to.regress = "percent.mt")
+}
+
+final_seurat_object_features <- SelectIntegrationFeatures(object.list = final_seurat_object,nfeatures = 3000)
+final_seurat_object <- PrepSCTIntegration(object.list = final_seurat_object,
+                                          anchor.features = final_seurat_object_features)
+
+final_seurat_object_anchors <- FindIntegrationAnchors(object.list = final_seurat_object,
+                                           normalization.method = "SCT",
+                                           anchor.features = final_seurat_object_features)
+
+
+
+final_seurat_object_integrated <- IntegrateData(anchorset = final_seurat_object_anchors,
+                                     normalization.method = "SCT")
+
+
+set.seed(888)
+final_seurat_object_integrated <- RunPCA(final_seurat_object_integrated, verbose = FALSE)
+final_seurat_object_integrated <- RunUMAP(final_seurat_object_integrated, dims = 1:30,return.model=TRUE)
+final_seurat_object_integrated <- FindNeighbors(final_seurat_object_integrated, dims = 1:30)
+final_seurat_object_integrated <- FindClusters(final_seurat_object_integrated, resolution = 0.3, algorithm = 4)
+
+
+set.seed(888)
+DefaultAssay(final_seurat_object_integrated) <- "RNA"
+final_seurat_object_integrated <- NormalizeData(final_seurat_object_integrated,
+                                            normalization.method = "LogNormalize", scale.factor =10000)
+
+
+# cluster 6 extraction
+
+set.seed(888)
+final_seurat_object_integrated6 <- subset(x = final_seurat_object_integrated, idents = c(6))
+final_seurat_object_integrated6 <- SCTransform(final_seurat_object_integrated6,
+                                        vars.to.regress = "percent.mt", verbose = FALSE)
+
+final_seurat_object_integrated6 <- RunPCA(final_seurat_object_integrated6, verbose = FALSE)
+
+final_seurat_object_integrated6 <- RunUMAP(final_seurat_object_integrated6, dims = 1:30)
+final_seurat_object_integrated6 <- FindNeighbors(final_seurat_object_integrated6, dims = 1:30)
+final_seurat_object_integrated6 <- FindClusters(final_seurat_object_integrated6, resolution = 0.5, algorithm = 4)
+
+DefaultAssay(final_seurat_object_integrated6) <- "RNA"
+final_seurat_object_integrated6 <- NormalizeData(final_seurat_object_integrated6,
+                                            normalization.method = "LogNormalize", scale.factor =10000)
+
+
+# cell scoring plots
+
+fetal.fasl.0 <- list(c("SCGB3A2",
+                       "SFTPB",
+                       "CYB5A",
+                       "VIM",
+                       "C16orf89",
+                       "CXCL17",
+                       "XBP1",
+                       "MGST1",
+                       "SSR4",
+                       "CFH",
+                       "LMO3",
+                       "C3",
+                       "STEAP4",
+                       "CLU",
+                       "FMO2",
+                       "CP",
+                       "CFTR",
+                       "KLK11",
+                       "CYTL1",
+                       "HNMT",
+                       "CFHR1",
+                       "SLC4A4",
+                       "HOPX",
+                       "RNASE1",
+                       "SERPINF1",
+                       "TMSB4X",
+                       "NDRG1",
+                       "KLHL24",
+                       "GDF15",
+                       "KIAA1324",
+                       "CST3",
+                       "TMEM45A",
+                       "SERPINA1",
+                       "MET",
+                       "PTP4A2",
+                       "SERPINI1",
+                       "SPINK5",
+                       "SOD3",
+                       "PTP4A1",
+                       "MUC5B",
+                       "IFITM3",
+                       "SFTA2",
+                       "IFITM2",
+                       "TFF3",
+                       "RAMP2",
+                       "ASAH1",
+                       "DSTN",
+                       "RNU12",
+                       "SLC39A6",
+                       "FAM46C"))
+fetal.btp.1 <- list(c("SFTPC",
+                      "NPC2",
+                      "TESC",
+                      "CA2",
+                      "ETV5",
+                      "ASPSCR1",
+                      "WIF1",
+                      "CD36",
+                      "CPM",
+                      "SFTA3",
+                      "IGFBP7",
+                      "TPD52L1",
+                      "MFSD2A",
+                      "ATP11A",
+                      "TPM1",
+                      "FTL",
+                      "SLC34A2",
+                      "BAMBI",
+                      "ID2",
+                      "COL9A3",
+                      "TKT",
+                      "HNRNPA1",
+                      "ADAMTS1",
+                      "PIK3C2G",
+                      "NHSL1",
+                      "TMSB10",
+                      "NREP",
+                      "MARCKSL1",
+                      "NOTUM",
+                      "CLDN6",
+                      "MEST",
+                      "NPM1",
+                      "GSTM3",
+                      "BTG1",
+                      "RPL5",
+                      "RPS23",
+                      "NSG1",
+                      "RPL6",
+                      "ENO1",
+                      "CLDN2",
+                      "RPS3A",
+                      "EDNRB",
+                      "RPL3",
+                      "RPL11",
+                      "EIF3E",
+                      "HAS3",
+                      "EEF1A1",
+                      "MYL9",
+                      "LDHB",
+                      "SFTPA1"))
+fetal.bta.2 <- list(c("AGER",
+                    "CLIC3",
+                    "MYL9",
+                    "TNNC1",
+                    "CAV1",
+                    "SMARCA5",
+                    "S100A10",
+                    "CLDN6",
+                    "ICAM4",
+                    "CLDN18",
+                    "SFTA3",
+                    "FOLR1",
+                    "AQP4",
+                    "SPARC",
+                    "EDN3",
+                    "NDNF",
+                    "PCP4",
+                    "NGFRAP1",
+                    "PDPN",
+                    "MXRA8",
+                    "TMSB10",
+                    "ANKRD29",
+                    "FTL",
+                    "RPS20",
+                    "RPS3",
+                    "RPL5",
+                    "MBIP",
+                    "CD47",
+                    "TUBB",
+                    "ANXA3",
+                    "ZFAS1",
+                    "PTMA",
+                    "NKX2-1",
+                    "RPL31",
+                    "TSPAN13",
+                    "RPL11",
+                    "GDF15",
+                    "RPL35A",
+                    "RPL23A",
+                    "RPS27",
+                    "RPL41",
+                    "RPS8",
+                    "RPL10A",
+                    "NREP",
+                    "RPS23",
+                    "NPM1",
+                    "RPL24",
+                    "RPS25",
+                    "HOPX"))
+fetal.multiciliated.3 <- list(c("TMEM190",
+                                "CAPS",
+                                "C9orf24",
+                                "C20orf85",
+                                "C1orf194",
+                                "FAM183A",
+                                "RP11-356K23.1",
+                                "OMG",
+                                "RSPH1",
+                                "PIFO",
+                                "AGR3",
+                                "ODF3B",
+                                "SNTN",
+                                "FABP6",
+                                "TSPAN1",
+                                "CCDC78",
+                                "DYNLRB2",
+                                "DNAAF1",
+                                "TPPP3",
+                                "C5orf49",
+                                "MS4A8",
+                                "C9orf116",
+                                "CAPSL",
+                                "SMIM22",
+                                "C9orf117",
+                                "CETN2",
+                                "AC013264.2",
+                                "MORN5",
+                                "TSPAN19",
+                                "TUBB4B",
+                                "CRIP1",
+                                "CDHR3",
+                                "MRPS31",
+                                "MORN2",
+                                "C1orf192",
+                                "FAM92B",
+                                "PSENEN",
+                                "FAM216B",
+                                "TMC5",
+                                "ZMYND10",
+                                "CCDC17",
+                                "LRRIQ1",
+                                "C22orf15",
+                                "C21orf58",
+                                "C11orf88",
+                                "EFHC1",
+                                "SLC44A4",
+                                "LRRC46",
+                                "CES1",
+                                "FOXJ1"))
+fetal.basal.4 <- list(c("KRT15",
+                        "KRT5",
+                        "S100A2",
+                        "MIR205HG",
+                        "AQP3",
+                        "KRT19",
+                        "TACSTD2",
+                        "SFN",
+                        "JUNB",
+                        "KLF5",
+                        "PERP",
+                        "F3",
+                        "CD9",
+                        "HCAR3",
+                        "IGFBP2",
+                        "JUN",
+                        "CSTA",
+                        "NPPC",
+                        "HCAR2",
+                        "FOS",
+                        "IL33",
+                        "DLK2",
+                        "ADH7",
+                        "CAPNS2",
+                        "PKP1",
+                        "TP63",
+                        "PNCK",
+                        "RPLP1",
+                        "BHLHE40",
+                        "HSPB1",
+                        "ZFP36",
+                        "GJB2",
+                        "KRT13",
+                        "LSP1",
+                        "EGR1",
+                        "IGFBP3",
+                        "SERPINB5",
+                        "IER3",
+                        "ARL4D",
+                        "MYC",
+                        "MPZL2",
+                        "COL7A1",
+                        "PLP2",
+                        "MEG3",
+                        "ZFP36L1",
+                        "CALML3",
+                        "FOSB",
+                        "LMNA",
+                        "PVRL1",
+                        "ACKR3"))
+fetal.secretory1.5 <- list(c("SCGB1A1",
+                             "KRT4",
+                             "WFDC2",
+                             "MSLN",
+                             "IGF2",
+                             "SERPINB3",
+                             "SLPI",
+                             "ANXA1",
+                             "MUC4",
+                             "S100A9",
+                             "KRT13",
+                             "S100P",
+                             "KRT19",
+                             "TACSTD2",
+                             "UPK1B",
+                             "IGFBP3",
+                             "S100A6",
+                             "AQP3",
+                             "CLDN4",
+                             "APOBEC3A",
+                             "CYP2F1",
+                             "RHOV",
+                             "TNNT3",
+                             "CEACAM6",
+                             "C19orf33",
+                             "PLAC8",
+                             "KLF5",
+                             "ELF3",
+                             "FAM3D",
+                             "LSP1",
+                             "VMO1",
+                             "F3",
+                             "LCN2",
+                             "LYPD2",
+                             "CSTA",
+                             "ASS1",
+                             "SLC16A9",
+                             "TNFSF10",
+                             "SERPINB2",
+                             "GPR110",
+                             "MUC20",
+                             "EPHA2",
+                             "TCN1",
+                             "A4GALT",
+                             "GABRP",
+                             "LYN",
+                             "PDE4C",
+                             "FUT3",
+                             "TFF3",
+                             "FABP5"))
+fetal.secretory2.6 <- list(c("LTF",
+                              "TM4SF1",
+                              "SLPI",
+                              "KRT7",
+                              "AZGP1",
+                              "NDRG2",
+                              "TTYH1",
+                              "MIA",
+                              "SCGB3A1",
+                              "WFDC2",
+                              "APIP",
+                              "CALML5",
+                              "PHLDA1",
+                              "SLC12A2",
+                              "FAM3D",
+                              "TCN1",
+                              "EHF",
+                              "CCL28",
+                              "KRT14",
+                              "MYC",
+                              "SHISA2",
+                              "MGP",
+                              "GMDS",
+                              "FCGBP",
+                              "FABP7",
+                              "KCNN4",
+                              "PTN",
+                              "FOXC1",
+                              "GLYATL2",
+                              "ZG16B",
+                              "NFIB",
+                              "APOE",
+                              "SOX9",
+                              "AQP5",
+                              "RPL36",
+                              "ALDH1A3",
+                              "SERPINE2",
+                              "CTNNB1",
+                              "DUSP6",
+                              "TIMP1",
+                              "COL9A3",
+                              "INSR",
+                              "KRT19",
+                              "EFCAB4A",
+                              "TSPAN8",
+                              "ZFP36L1",
+                              "GABRP",
+                              "EPHB3",
+                              "NFKBIZ",
+                              "PABPC1"))
+fetal.multiciliatedprecursor.7 <- list(c("CDC20B",
+                                       "LRRC26",
+                                       "HES6",
+                                       "ZMYND10",
+                                       "CDK1",
+                                       "CCDC74A",
+                                       "CCDC67",
+                                       "HYLS1",
+                                       "NEK2",
+                                       "CDC20",
+                                       "C1orf192",
+                                       "PLK4",
+                                       "SPAG6",
+                                       "RIBC2",
+                                       "CCDC19",
+                                       "ANLN",
+                                       "POC1A",
+                                       "HIST1H2BJ",
+                                       "FOXN4",
+                                       "E2F7",
+                                       "MCIDAS",
+                                       "SYT5",
+                                       "STIL",
+                                       "C11orf88",
+                                       "CCNO",
+                                       "C5orf49",
+                                       "MELK",
+                                       "ROPN1L",
+                                       "RP11-263K19.4",
+                                       "C11orf16",
+                                       "SGOL2",
+                                       "MUC12",
+                                       "FOXJ1",
+                                       "FAM183A",
+                                       "C7orf57",
+                                       "TEKT2",
+                                       "DNAH12",
+                                       "RSPH9",
+                                       "STMND1",
+                                       "LRRC46",
+                                       "DNAAF3",
+                                       "PITPNM1",
+                                       "KDELC2",
+                                       "RSPH1",
+                                       "ARMC3",
+                                       "CEP152",
+                                       "MYB",
+                                       "PIFO",
+                                       "SPEF1",
+                                       "CAPSL"))
+fetal.neuroendocrine.8 <- list(c("GHRL",
+                                 "GRP",
+                                 "SEC11C",
+                                 "PCSK1N",
+                                 "CPE",
+                                 "NNAT",
+                                 "CHGA",
+                                 "ASCL1",
+                                 "RPRM",
+                                 "IGFBP5",
+                                 "HES6",
+                                 "BEX1",
+                                 "ACSL1",
+                                 "SCGN",
+                                 "HEPACAM2",
+                                 "CALCA",
+                                 "MEG3",
+                                 "TMEM176B",
+                                 "TMEM176A",
+                                 "BIK",
+                                 "SCG5",
+                                 "APOA1BP",
+                                 "UCHL1",
+                                 "MIAT",
+                                 "C12orf75",
+                                 "KLK12",
+                                 "CHGB",
+                                 "SLC35D3",
+                                 "NPDC1",
+                                 "DDC",
+                                 "TAGLN3",
+                                 "GFRA3",
+                                 "SCG3",
+                                 "NPW",
+                                 "SCG2",
+                                 "TUBB2B",
+                                 "C3orf14",
+                                 "ATP6V0B",
+                                 "MAOB",
+                                 "VAMP2",
+                                 "C4orf48",
+                                 "APLP1",
+                                 "LINC00261",
+                                 "BEX2",
+                                 "BCAM",
+                                 "LY6H",
+                                 "CA8",
+                                 "FAM105A",
+                                 "TUBA1A",
+                                 "HOXB5"))
+
+
+
+set.seed(888)
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.fasl.0, 
+                                     name = "fetal.fasl.0", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.btp.1, 
+                                     name = "fetal.btp.1", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.bta.2, 
+                                     name = "fetal.bta.2", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.multiciliated.3, 
+                                     name = "fetal.multiciliated.3", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.basal.4, 
+                                     name = "fetal.basal.4", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.secretory1.5, 
+                                     name = "fetal.secretory1.5", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.secretory2.6, 
+                                     name = "fetal.secretory2.6", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.multiciliatedprecursor.7, 
+                                     name = "fetal.multiciliatedprecursor.7", search = TRUE, assay = "RNA")
+
+final_seurat_object_integrated <-AddModuleScore(final_seurat_object_integrated, features = fetal.neuroendocrine.8, 
+                                     name = "fetal.neuroendocrine.8", search = TRUE, assay = "RNA")
+
+
+
+
+FeaturePlot(final_seurat_object_integrated, features = "fetal.fasl.01",raster = FALSE,
+            slot = "data",pt.size = 0.5) & RotatedAxis() & scale_colour_gradientn(colors =                                                                                  c("lightgrey","#ffffd9","#edf8b1","#c7e9b4","#7fcdbb","#41b6c4","#1d91c0","#225ea8","#253494","#081d58")) &   xlab("UMAP1") & ylab("UMAP2") & labs(title = "fetal.fasl.0")
+```
 
