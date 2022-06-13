@@ -1,0 +1,218 @@
+---
+title: "Conchola_2022_bioinformatics"
+author: "Zhiwei Xiao"
+date: "6/13/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# fetal data processing
+```{r}
+library(Seurat)
+
+#navigate to appropriate folder for each 10x run.
+f59ddistal.data <- Read10X(data.dir = "./")
+f59dairway.data <- Read10X(data.dir = "./")
+f132ddistal.data <- Read10X(data.dir = "./")
+f80ddistal.data <- Read10X(data.dir = "./")
+f80dairway.data <- Read10X(data.dir = "./")
+f145dtrach.data <- Read10X(data.dir = "./")
+f103ddistal.data <- Read10X(data.dir = "./")
+f103dairway.data <- Read10X(data.dir = "./")
+f103dtrach.data <- Read10X(data.dir = "./")
+f125dairway.data <- Read10X(data.dir = "./")
+f125ddistal.data <- Read10X(data.dir = "./")
+
+f103dairway <- CreateSeuratObject(counts = f103dairway.data, project = "f103dairway", min.cells = 3, min.features = 200)
+f103ddistal <- CreateSeuratObject(counts = f103ddistal.data, project = "f103ddistal", min.cells = 3, min.features = 200)
+f125dairway <- CreateSeuratObject(counts = f125dairway.data, project = "f125dairway", min.cells = 3, min.features = 200)
+f132ddistal <- CreateSeuratObject(counts = f132ddistal.data, project = "f132ddistal", min.cells = 3, min.features = 200)
+f125ddistal <- CreateSeuratObject(counts = f125ddistal.data, project = "f125ddistal", min.cells = 3, min.features = 200)
+f59dairway <- CreateSeuratObject(counts = f59dairway.data, project = "f59dairway", min.cells = 3, min.features = 200)
+f59ddistal <- CreateSeuratObject(counts = f59ddistal.data, project = "f59ddistal", min.cells = 3, min.features = 200)
+f80dairway  <- CreateSeuratObject(counts = f80dairway.data, project = "f80dairway", min.cells = 3, min.features = 200)
+f80ddistal <- CreateSeuratObject(counts = f80ddistal.data, project = "f80ddistal", min.cells = 3, min.features = 200)
+f145dtrach <- CreateSeuratObject(counts = f145dtrach.data, project = "f145dtrach", min.cells = 3, min.features = 200)
+f103dtrach <- CreateSeuratObject(counts = f103dtrach.data, project = "f103dtrach", min.cells = 3, min.features = 200)
+
+
+f103dairway <- RenameCells(object = f103dairway, add.cell.id = "f103dairway")
+f103ddistal <- RenameCells(object = f103ddistal, add.cell.id = "f103ddistal")
+f125dairway <- RenameCells(object = f125dairway, add.cell.id = "f125dairway")
+f132ddistal <- RenameCells(object = f132ddistal, add.cell.id = "f132ddistal")
+f125ddistal <- RenameCells(object = f125ddistal, add.cell.id = "f125ddistal")
+f59dairway <- RenameCells(object = f59dairway, add.cell.id = "f59dairway")
+f59ddistal <- RenameCells(object = f59ddistal, add.cell.id = "f59ddistal")
+f80dairway  <- RenameCells(object = f80dairway, add.cell.id = "f80dairway")
+f80ddistal <- RenameCells(object = f80ddistal, add.cell.id = "f80ddistal")
+f145dtrach <- RenameCells(object = f145dtrach, add.cell.id = "f145dtrach")
+f103dtrach <- RenameCells(object = f103dtrach, add.cell.id = "f103dtrach")
+
+f103dairway[["percent.mt"]] <- PercentageFeatureSet(f103dairway, pattern = "^MT-") 
+f103ddistal[["percent.mt"]] <- PercentageFeatureSet(f103ddistal, pattern = "^MT-") 
+f125dairway[["percent.mt"]] <- PercentageFeatureSet(f125dairway, pattern = "^MT-") 
+f132ddistal[["percent.mt"]] <- PercentageFeatureSet(f132ddistal, pattern = "^MT-") 
+f125ddistal[["percent.mt"]] <- PercentageFeatureSet(f125ddistal, pattern = "^MT-")
+f59dairway[["percent.mt"]] <- PercentageFeatureSet(f59dairway, pattern = "^MT-") 
+f59ddistal[["percent.mt"]] <- PercentageFeatureSet(f59ddistal, pattern = "^MT-") 
+f80dairway[["percent.mt"]]  <- PercentageFeatureSet(f80dairway, pattern = "^MT-") 
+f80ddistal[["percent.mt"]] <- PercentageFeatureSet(f80ddistal, pattern = "^MT-")
+f145dtrach[["percent.mt"]] <- PercentageFeatureSet(f145dtrach, pattern = "^MT-")
+f103dtrach[["percent.mt"]] <- PercentageFeatureSet(f103dtrach, pattern = "^MT-")
+
+
+fetal.combined = merge(f103dairway, y = c(f103ddistal, f125dairway, f132ddistal, f125ddistal, f59dairway, f59ddistal, f80dairway, f80ddistal, f103dtrach, f145dtrach), project = "fetallung")
+ribo.genes <- grep(pattern = "^RP[SL][[:digit:]]", x = rownames(x = fetal.combined), value = TRUE);
+percent.ribo <- Matrix::colSums(x = GetAssayData(object = fetal.combined, slot = 'counts')[ribo.genes, ]) / Matrix::colSums(x = GetAssayData(object = fetal.combined, slot = 'counts'));
+fetal.combined[['percent.ribo']] <- percent.ribo;
+
+setwd("~/scRNAseq/Output/2021-08-22 Bud-Tip to BTA/All Data")
+
+
+pdf(file.path("./", paste0("QC percent MT", ".pdf")), w=11, h=8.5)
+VlnPlot(fetal.combined, features = "percent.mt")
+dev.off()
+pdf(file.path("./", paste0("QC nFeature_RNA", ".pdf")), w=11, h=8.5)
+VlnPlot(fetal.combined, features = "nFeature_RNA")
+dev.off()
+pdf(file.path("./", paste0("QC percent ribo", ".pdf")), w=11, h=8.5)
+VlnPlot(fetal.combined, features = "percent.ribo")
+dev.off()
+pdf(file.path("./", paste0("QC nCount_RNA", ".pdf")), w=11, h=8.5)
+VlnPlot(fetal.combined, features = "nCount_RNA", y.max = 50000)
+dev.off()
+
+VlnPlot(fetal.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+fetal.combined <- subset(fetal.combined, subset = nFeature_RNA > 500 & nFeature_RNA < 12000 & percent.mt < 10)
+
+fetal.combined <- SplitObject(fetal.combined, split.by = "orig.ident")
+for (i in seq_along(fetal.combined)) {
+  fetal.combined[[i]] <- NormalizeData(fetal.combined[[i]]) %>% FindVariableFeatures()
+}
+features <- SelectIntegrationFeatures(fetal.combined)
+for (i in seq_along(along.with = fetal.combined)) {
+  fetal.combined[[i]] <- ScaleData(fetal.combined[[i]], features = features) %>% RunPCA(features = features)
+}
+anchors <- FindIntegrationAnchors(fetal.combined, anchor.features = features, reduction = "rpca", dims = 1:30)
+fetal.combined.integrated <- IntegrateData(anchors, dims = 1:30)
+DefaultAssay(fetal.combined.integrated) <- "integrated"
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+fetal.combined.integrated <- CellCycleScoring(fetal.combined.integrated, s.features = s.genes, g2m.features = g2m.genes)
+fetal.combined.integrated <- ScaleData(fetal.combined.integrated, vars.to.regress = c("S.Score", "G2M.Score"))
+fetal.combined.integrated <- RunPCA(fetal.combined.integrated)
+ElbowPlot(fetal.combined.integrated, ndims = 50)
+fetal.combined.integrated <- RunUMAP(fetal.combined.integrated, dims = 1:30, reduction.name = "umap", return.model = TRUE)
+fetal.combined.integrated <- FindNeighbors(fetal.combined.integrated, dims = 1:30)
+fetal.combined.integrated <- FindClusters(fetal.combined.integrated, resolution = 0.5)
+DimPlot(fetal.combined.integrated, group.by = c("orig.ident", "ident"), label = TRUE, pt.size = 0.5)
+
+
+compartment <- c("VIM", "PTPRC", "CDH1", "EPCAM", "PECAM1", "PDGFRA", "CDH5")
+epithelial.markers <- c("SFTPC","SFTPA1", "ABCA3", "HOPX", "AGER", "SOX9", "SOX2", "FGF20", "TP63", "FOXJ1", "CHGA", 'SCGB3A2')
+
+
+pdf(file.path("./", paste0("Louvain", ".pdf")), w=11, h=8.5)
+DimPlot(fetal.combined.integrated, reduction = "umap", label = TRUE, pt.size = 2)
+dev.off()
+pdf(file.path("./", paste0("UMAPbySample", ".pdf")), w=11, h=8.5)
+DimPlot(fetal.combined.integrated, reduction = "umap", group.by = "orig.ident", label = TRUE, pt.size = 2)
+dev.off()
+
+
+
+
+
+DefaultAssay(fetal.combined.integrated) <- "RNA"
+fetal.combined.integrated <- NormalizeData(fetal.combined.integrated)
+
+
+pdf(file.path("./", paste0("Compartment", ".pdf")), w=11, h=8.5)
+FeaturePlot(fetal.combined.integrated, features = compartment, pt.size = 0.2, order = TRUE)
+dev.off()
+
+pdf(file.path("./", paste0("Proliferating", ".pdf")), w=11, h=8.5)
+FeaturePlot(fetal.combined.integrated, features = c("MKI67", "TOP2A"), pt.size = 0.2, order = TRUE)
+dev.off()
+
+pdf(file.path("./", paste0("Epithelial Markers", ".pdf")), w=11, h=8.5)
+FeaturePlot(fetal.combined.integrated, features = epithelial.markers, pt.size = 0.2, order = TRUE)
+dev.off()
+
+
+#extract epithelium based on above 3 feature plots and enrichment lists
+setwd("~/scRNAseq/Output/2021-08-22 Bud-Tip to BTA/Epithelial")
+
+fetal.epithelial <- subset(fetal.combined.integrated, idents = c(13, 23, 10, 12, 5, 19, 22))
+fetal.epithelial.cellids <- WhichCells(fetal.epithelial)
+
+DefaultAssay(fetal.epithelial) <- "integrated"
+fetal.epithelial <- RunPCA(fetal.epithelial, verbose = FALSE)
+ElbowPlot(fetal.epithelial, ndims = 50)
+fetal.epithelial <- RunUMAP(fetal.epithelial, reduction = "pca", dims = 1:12, return.model = TRUE)
+fetal.epithelial <- FindNeighbors(fetal.epithelial, dims = 1:12)
+fetal.epithelial <- FindClusters(fetal.epithelial, resolution = 0.2)
+DimPlot(fetal.epithelial, group.by = c("orig.ident", "ident"), label = TRUE, pt.size = 0.5)
+
+#Figure 1A
+pdf(file.path("./", paste0("Louvain", ".pdf")), w=11, h=8.5)
+DimPlot(fetal.epithelial, reduction = "umap", label = TRUE, pt.size = 2)
+dev.off()
+
+#Figure S1D
+pdf(file.path("./", paste0("UMAPbySample", ".pdf")), w=11, h=8.5)
+DimPlot(fetal.epithelial, reduction = "umap", group.by = "orig.ident", label = TRUE, pt.size = 2)
+dev.off()
+
+
+
+
+
+DefaultAssay(fetal.epithelial) <- "RNA"
+fetal.epithelial <- NormalizeData(fetal.epithelial)
+
+pdf(file.path("./", paste0("Epithelial Markers", ".pdf")), w=11, h=8.5)
+FeaturePlot(fetal.epithelial, features = epithelial.markers, pt.size = 2, order = TRUE)
+dev.off()
+
+#Figure 1B
+pdf(file.path("./", paste0("Epithelial Markers", ".pdf")), w=11, h=8.5)
+FeaturePlot(fetal.epithelial, features = c("SCGB3A2", "SFTPB", "CFTR"), pt.size = 2, order = TRUE)
+dev.off()
+#Figure 3B
+pdf(file.path("./", paste0("Epithelial Markers", ".pdf")), w=11, h=8.5)
+FeaturePlot(fetal.epithelial, features = c("C6", "MUC16"), pt.size = 0.2, order = TRUE)
+dev.off()
+#Data for Figure S1E
+write.csv(table(Idents(fetal.epithelial)), "CellsPerCluster.csv") #number of cells in each cluster
+write.csv(table(Idents(fetal.epithelial), fetal.epithelial$orig.ident), "ClusterbyRun.csv")
+
+zero.markers <- FindMarkers(fetal.epithelial, ident.1 = 0, min.pct = 0.25)
+one.markers <- FindMarkers(fetal.epithelial, ident.1 = 1, min.pct = 0.25)
+two.markers <- FindMarkers(fetal.epithelial, ident.1 = 2, min.pct = 0.25)
+three.markers <- FindMarkers(fetal.epithelial, ident.1 = 3, min.pct = 0.25)
+four.markers <- FindMarkers(fetal.epithelial, ident.1 = 4, min.pct = 0.25)
+five.markers <- FindMarkers(fetal.epithelial, ident.1 = 5, min.pct = 0.25)
+six.markers <- FindMarkers(fetal.epithelial, ident.1 = 6, min.pct = 0.25)
+seven.markers <- FindMarkers(fetal.epithelial, ident.1 = 7, min.pct = 0.25)
+eight.markers <- FindMarkers(fetal.epithelial, ident.1 = 8, min.pct = 0.25)
+nine.markers <- FindMarkers(fetal.epithelial, ident.1 = 9, min.pct = 0.25)
+
+write.csv(zero.markers, "Cluster0.csv")
+write.csv(one.markers, "Cluster1.csv")
+write.csv(two.markers, "Cluster2.csv")
+write.csv(three.markers, "Cluster3.csv")
+write.csv(four.markers, "Cluster4.csv")
+write.csv(five.markers, "Cluster5.csv")
+write.csv(six.markers, "Cluster6.csv")
+write.csv(seven.markers, "Cluster7.csv")
+write.csv(eight.markers, "Cluster8.csv")
+write.csv(nine.markers, "Cluster9.csv")
+
+
+
+```
+
