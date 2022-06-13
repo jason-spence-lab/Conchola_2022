@@ -9,7 +9,7 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# fetal data processing
+# general fetal data processing
 ```{r}
 library(Seurat)
 
@@ -212,7 +212,151 @@ write.csv(seven.markers, "Cluster7.csv")
 write.csv(eight.markers, "Cluster8.csv")
 write.csv(nine.markers, "Cluster9.csv")
 
-
-
 ```
+
+# general cell tag data processing
+```{r}
+library(CellTagR)
+##set working directory to bam file
+bam.test.obj <- CellTagObject(object.name = "bam.cell.tag.obj", fastq.bam.directory = "./ubam/")
+bam.test.obj <- CellTagExtraction(bam.test.obj, celltag.version = "v1")
+bam.test.obj.unprocessed <- bam.test.obj
+head(bam.test.obj@bam.parse.rslt[["v1"]])
+setwd("~/scRNAseq/Data/CellTag/2021ACSHT4??CellTagV 1Sort/barcodes")
+bam.test.obj <- CellTagMatrixCount(celltag.obj = bam.test.obj, barcodes.file = "./barcodes.tsv")
+dim(bam.test.obj@raw.count)
+setwd("~/scRNAseq/Data/CellTag/2021ACSHT4??CellTagV 1Sort/collapsing")
+bam.test.obj.nostarcode <- bam.test.obj
+bam.test.obj <- CellTagDataForCollapsing(celltag.obj = bam.test.obj, output.file = "collapsing.txt")
+##move collapsing.txt to the desktop folder (delete old files) and run the following in terminal from the starcode folder:
+## cd..
+## cd starcode
+## cd starcode
+## ./starcode -s --print-clusters ~/Desktop/collapsing.txt > ~/Desktop/collapsing_result.txt
+##move collapsing_result file back to collapsing directoryhead(bam.test.obj@collapsed.count)
+bam.test.obj <- CellTagDataPostCollapsing(celltag.obj = bam.test.obj, collapsed.rslt.file = "./collapsing_result.txt")
+bam.test.obj <- SingleCellDataBinatization(bam.test.obj, 2)
+bam.test.obj.nowhitelist <- bam.test.obj
+
+#set working directory to whitelist file
+bam.test.obj <- SingleCellDataWhitelist(bam.test.obj, whitels.cell.tag.file = "./v1_whitelist.csv")
+
+bam.test.obj.prefilter <- bam.test.obj
+bam.test.obj <- MetricBasedFiltering(bam.test.obj, 2, comparison = "greater")
+bam.test.obj <- MetricBasedFiltering(bam.test.obj, 20, comparison = "less")
+bam.test.obj <- JaccardAnalysis(bam.test.obj)
+bam.test.obj <- CloneCalling(celltag.obj = bam.test.obj, correlation.cutoff=0.7)
+bam.test.obj@clone.size.info[["v1"]]
+bam.test.obj@clone.composition[["v1"]]
+bam.test.obj.clonescalled <- bam.test.obj 
+
+library(Seurat)
+#setwd(source for data)
+celltag.data <- Read10X(data.dir = "./")
+celltag <- CreateSeuratObject(counts = celltag.data, project = "RUN1", min.cells = 3, min.features = 200)
+cloneid <- bam.test.obj@clone.composition[["v1"]][["clone.id"]]
+clonebarcode <- bam.test.obj@clone.composition[["v1"]][["cell.barcode"]]
+cloneid2 <- data.frame(cloneid, row.names = clonebarcode)
+celltag <- AddMetaData(object = celltag, metadata = cloneid2, col.name = "cloneid")
+
+
+celltag[["percent.mt"]] <- PercentageFeatureSet(celltag, pattern = "^MT-")
+VlnPlot(celltag, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+dev.off()
+celltag <- subset(celltag, subset = nFeature_RNA > 500 & nFeature_RNA < 10000 & percent.mt < 10)
+celltag <- NormalizeData(celltag)
+celltag <- FindVariableFeatures(celltag, selection.method = "vst", nfeatures = 500)
+celltag <- ScaleData(celltag)
+celltag <- RunPCA(celltag, features = VariableFeatures(celltag))
+ElbowPlot(celltag, ndims = 50)
+celltag <- RunUMAP(celltag, dims = 1:10, reduction.name = "umap", return.model = TRUE)
+celltag <- FindNeighbors(celltag, dims = 1:10)
+celltag <- FindClusters(celltag, resolution = 0.3)
+
+#Figure 1C
+pdf(file.path("./", paste0("Cell Tag Louvain", ".pdf")), w=11, h=8.5)
+DimPlot(celltag, label = TRUE, pt.size = 2)
+dev.off()
+
+pdf(file.path("./", paste0("Cell Tag Louvain No Label", ".pdf")), w=11, h=8.5)
+DimPlot(celltag, label = FALSE, pt.size = 2)
+dev.off()
+DefaultAssay(celltag) <- "RNA"
+celltag <- NormalizeData(celltag)
+
+pdf(file.path("./", paste0("FASrootedclonesV3", ".pdf")), w=11, h=8.5)
+DimPlot(celltag, cells.highlight = fasrooted.cellids, pt.size = 2, sizes.highlight = 3)
+dev.off()
+pdf(file.path("./", paste0("BasalrootedclonesV3", ".pdf")), w=11, h=8.5)
+DimPlot(celltag, cells.highlight = basalrooted.cellids, pt.size = 2, sizes.highlight = 3)
+dev.off()
+
+write.csv(table(Idents(celltag)), "CellsPerCluster.csv") #number of cells in each cluster
+write.csv(table(Idents(celltag), celltag$orig.ident), "ClusterbyRun.csv") #number of cells in each cluster by run
+highfrequencyclones <- bam.test.obj@clone.size.info[["v1"]] 
+highfreqcloneid <-subset(highfrequencyclones, Frequency >= 10, select = Clone.ID) #identify clones with frequency >= 10
+celltag@meta.data["cloneid"][is.na(celltag@meta.data["cloneid"])] <- 0 #set all NA clones to 0 for subsetting
+for (i in highfreqcloneid[["Clone.ID"]]) {
+  cells.use <- colnames(celltag)[which(celltag[[]][["cloneid"]] == c(i))]
+  pdf(file.path("./", paste0("clone", i, ".pdf")), w=11, h=8.5)
+  print(DimPlot(celltag, reduction = "umap", cells.highlight = cells.use, sizes.highlight = 3, pt.size = 2, order = TRUE))
+  dev.off()
+} #export a pdf of the UMAP for every clone equal or greater than 10 in frequency
+
+#export a heatmap of clonesbycluster
+clonebycluster <- table(celltag$cloneid, Idents(celltag)) #number of cells in each cluster by cloneid
+clonebycluster.rownames <- rownames(clonebycluster)
+clonebyclustermtx <- as.data.frame.matrix(clonebycluster)
+clonebyclustermtx <- mutate(clonebyclustermtx, Frequency = rowSums(clonebyclustermtx))
+rownames(clonebyclustermtx) <- clonebycluster.rownames
+clonebyclustermtxhighfreq <- subset(clonebyclustermtx, Frequency >= 10)
+clonebyclustermtx <- as.matrix(clonebyclustermtxhighfreq)
+clonebyclustermtx <- clonebyclustermtx[,-9]
+clonebyclustermtx <- clonebyclustermtx[-1,]
+write.csv(clonebyclustermtx, "CloneByClusterMtx.csv")
+pdf(file.path("./", paste0("ClonebyClusterHeatmap", ".pdf")), w=11, h=8.5)
+heatmap(clonebyclustermtx)
+dev.off()
+
+
+##output enrichment lists
+zero.markers <- FindMarkers(celltag, ident.1 = 0, min.pct = 0.25)
+one.markers <- FindMarkers(celltag, ident.1 = 1, min.pct = 0.25)
+two.markers <- FindMarkers(celltag, ident.1 = 2, min.pct = 0.25)
+three.markers <- FindMarkers(celltag, ident.1 = 3, min.pct = 0.25)
+four.markers <- FindMarkers(celltag, ident.1 = 4, min.pct = 0.25)
+five.markers <- FindMarkers(celltag, ident.1 = 5, min.pct = 0.25)
+six.markers <- FindMarkers(celltag, ident.1 = 6, min.pct = 0.25)
+seven.markers <- FindMarkers(celltag, ident.1 = 7, min.pct = 0.25)
+
+write.csv(zero.markers, "Cluster0.csv")
+write.csv(one.markers, "Cluster1.csv")
+write.csv(two.markers, "Cluster2.csv")
+write.csv(three.markers, "Cluster3.csv")
+write.csv(four.markers, "Cluster4.csv")
+write.csv(five.markers, "Cluster5.csv")
+write.csv(six.markers, "Cluster6.csv")
+write.csv(seven.markers, "Cluster7.csv")
+
+
+##create cellid lists of each rooted clone type
+basalrooted.subset <-subset(celltag, subset = cloneid == "3" | cloneid == "7" | cloneid == "10" | cloneid == "30" | cloneid == "47" | cloneid == "60" | cloneid == "64" | cloneid == "73" | cloneid == "80" | cloneid == "93" | cloneid == "95" | cloneid == "101" | cloneid == "108") 
+basalrooted.cellids <- WhichCells(basalrooted.subset)
+fasrooted.subset <- subset(celltag, subset = cloneid == "2" | cloneid == "4" | cloneid == "5" | cloneid == "11" | cloneid == "12" | cloneid == "14" | cloneid == "20" | cloneid == "21" | cloneid == "24" | cloneid == "26" | cloneid == "28" | cloneid == "29" | cloneid == "38" | cloneid == "42" | cloneid == "43" | cloneid == "53" | cloneid == "56" | cloneid == "71" | cloneid == "79" | cloneid == "92" | cloneid == "96" | cloneid == "98")
+fasrooted.cellids <- WhichCells(fasrooted.subset)
+#Figure 2D
+pdf(file.path("./", paste0("Basal Dominant clones" ,".pdf")), w=11, h=8.5)
+DimPlot(basalrooted.subset, pt.size = 2)
+dev.off()
+pdf(file.path("./", paste0("FAS Dominant clones", ".pdf")), w=11, h=8.5)
+DimPlot(fasrooted.subset, pt.size = 2)
+dev.off()
+
+fasrooted.subset <- AddMetaData(fasrooted.subset, "fas", col.name = "root")
+basalrooted.subset <- AddMetaData(basalrooted.subset, "basal", col.name = "root")
+celltag <- RenameIdents(object = celltag, '0' = "Basal", '1' = "FAS", '2' = "Multiciliated", '3' = "SCGB1A1/3A1/SPDEF", '4' = "Unknown (ASCL1+)", '5' = "Cycling", '6' = "Deuterosome", '7' = "Neuroendocrine")
+```
+
+
+
 
