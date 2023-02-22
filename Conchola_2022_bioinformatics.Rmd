@@ -995,3 +995,106 @@ FeaturePlot(final_seurat_object_integrated, features = "fetal.fasl.01",raster = 
             slot = "data",pt.size = 0.5) & RotatedAxis() & scale_colour_gradientn(colors =                                                                                  c("lightgrey","#ffffd9","#edf8b1","#c7e9b4","#7fcdbb","#41b6c4","#1d91c0","#225ea8","#253494","#081d58")) &   xlab("UMAP1") & ylab("UMAP2") & labs(title = "fetal.fasl.0")
 ```
 
+
+## reference based mapping example
+
+```{r,message=FALSE,warning=FALSE}
+load("/Users/zhiweixiao/Downloads/HDCA_lung_all_celltypes_subset_dataset_without_doublets.RData")
+
+
+lung1_epithelium <- subset(lung1, idents = c("epi_cl0","epi_cl1","epi_cl2","epi_cl3","epi_cl4","epi_cl5","epi_cl6","epi_cl7","epi_cl8","epi_cl9","epi_cl10","epi_cl11","epi_cl11","epi_cl12","epi_cl13","epi_cl14"))
+
+
+lung1_new_object <- CreateSeuratObject(counts = lung1_epithelium[["RNA"]]@counts, meta.data = lung1_epithelium[[]])
+set.seed(888)
+lung1_new_object <- NormalizeData(lung1_new_object,
+                                            normalization.method = "LogNormalize", scale.factor =10000)
+lung1_new_object <-  FindVariableFeatures(lung1_new_object)
+lung1_new_object <- RunFastMNN(object.list = SplitObject(lung1_new_object, split.by = "orig.ident"))
+lung1_new_object <- RunUMAP(lung1_new_object, dims = 1:30,reduction = "mnn",return.model = TRUE)
+lung1_new_object <- FindNeighbors(lung1_new_object, dims = 1:30,reduction = "mnn")
+lung1_new_object <- FindClusters(lung1_new_object, resolution = 0.3, algorithm = 4)
+
+
+
+epithelium_list <- unlist(strsplit(c("SOX2, SOX9, TP63, KRT5, KRT13, KRT15, KRT17, FOXJ1, CHGA, ASCL1, NEUROD1, SYN1, SCGB3A2, SCGB3A1, SCGB1A1, SFTPB, SFTPC, SFTPA1, AGER, HOPX, CFTR, ETV5, ID2, AXIN2, SPDEF, CPM, MUC5AC, MUC2, MUC5B, MUC1, MUC16, C6, FOXI1, LAMP3, RNASE1, AQP5, PDPN"),split=", "))
+
+pdf("/Users/zhiweixiao/Documents/Seurat_Figures/Ansley_dec3_request/epithelium_list_featureplot.pdf",width=17,height=33)
+FeaturePlot(lung1_new_object, features = epithelium_list,raster = FALSE,
+            slot = "data",pt.size = 0.2,order = TRUE, reduction = "umap") & RotatedAxis() & scale_colour_gradientn(colors =                                                                                  c("lightgrey","#ffffd9","#edf8b1","#c7e9b4","#7fcdbb","#41b6c4","#1d91c0","#225ea8","#253494","#081d58")) &   xlab("UMAP1") & ylab("UMAP2")
+dev.off()
+
+set.seed(888)
+lung1_new_object_markers <- FindAllMarkers(object = lung1_new_object, 
+                          only.pos = TRUE,
+                          logfc.threshold = 0.25,
+                          min.pct = 0.25) 
+
+lung1_new_object_markers <- lung1_new_object_markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 100, order_by = avg_log2FC) %>% filter(cluster == 1)
+
+
+lung1_new_object_cluster1 <- subset(lung1_new_object, idents = 1)
+set.seed(888)
+lung1_new_object_cluster1 <- NormalizeData(lung1_new_object_cluster1,
+                                            normalization.method = "LogNormalize", scale.factor =10000)
+# lung1_new_object_cluster1 <-  FindVariableFeatures(lung1_new_object_cluster1)
+# lung1_new_object_cluster1 <- RunFastMNN(object.list = SplitObject(lung1_new_object_cluster1, split.by = "orig.ident"))
+lung1_new_object_cluster1 <- RunUMAP(lung1_new_object_cluster1, dims = 1:30,reduction = "mnn",return.model = TRUE)
+lung1_new_object_cluster1 <- FindNeighbors(lung1_new_object_cluster1, dims = 1:30,reduction = "mnn")
+lung1_new_object_cluster1 <- FindClusters(lung1_new_object_cluster1, resolution = 0.3, algorithm = 4)
+
+set.seed(888)
+lung1_new_object_cluster1_markers <- FindAllMarkers(object = lung1_new_object_cluster1, 
+                          only.pos = TRUE,
+                          logfc.threshold = 0.25,
+                          min.pct = 0.25) 
+
+lung1_new_object_cluster1_markers %>%
+    group_by(cluster) %>%
+    slice_max(n = 100, order_by = avg_log2FC) %>% filter(cluster == 3)
+
+
+
+query_data <- subset(lung1_new_object_cluster1, idents = c(3))
+DefaultAssay(query_data) <- "RNA"
+set.seed(888)
+query_data <- NormalizeData(query_data, normalization.method = "LogNormalize", scale.factor = 10000)
+query_data <- FindVariableFeatures(query_data, selection.method = "vst", nfeatures = 2000)
+query_data <- ScaleData(query_data,features = rownames(query_data))
+query_data <- RunPCA(query_data)
+
+
+fetal_epithelial <- readRDS("/Users/zhiweixiao/Downloads/2022-11-04 - Fetal Epithelial.rds")
+DefaultAssay(fetal_epithelial) <- "integrated"
+
+set.seed(888)
+fetal.lung.anchors <- FindTransferAnchors(reference = fetal_epithelial, query = query_data,
+    dims = 1:30, reference.reduction = "pca")
+
+fetal.lung.query <- MapQuery(anchorset = fetal.lung.anchors, reference = fetal_epithelial, query = query_data,reference.reduction = "pca", reduction.model = "umap",refdata = list(original_cluster = "seurat_clusters"))
+
+
+fetal_epithelial$source <- 'reference'
+fetal.lung.query$source <- 'query'
+refquery <- merge(fetal_epithelial, fetal.lung.query)
+refquery[["umap"]] <- merge(fetal_epithelial[["umap"]], fetal.lung.query[["ref.umap"]])
+
+cell_list <- list("HDCA_LUNG FAS" = WhichCells(object = refquery, expression = source == "query"))
+
+
+pdf("/Users/zhiweixiao/Documents/Seurat_Figures/Ansley_dec3_request/umap_projection.pdf", width=7.5, height=4.5)
+DimPlot(refquery, reduction = "umap", shuffle=TRUE, repel = TRUE, pt.size = 0.4,group.by = "source",
+        cells.highlight = cell_list,sizes.highlight = 0.5) +  labs(color = "Sample") + xlab("UMAP1") + ylab("UMAP2") + labs(title = NULL) 
+dev.off()
+
+
+fetal_epithelial <- as.SingleCellExperiment(fetal_epithelial)
+query_data <- as.SingleCellExperiment(query_data)
+
+set.seed(888)
+predictions <- SingleR(test=query_data, ref=fetal_epithelial, labels=fetal_epithelial$seurat_clusters)
+
+table(predictions$labels)
+```
